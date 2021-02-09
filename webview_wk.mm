@@ -120,7 +120,7 @@ void WebViewOverlay::_notification(int p_what) {
 
 					float sc = OS::get_singleton()->get_screen_max_scale();
 					Rect2i rect = get_window_rect();
-					float wh = OS::get_singleton()->get_window_size().y;
+					float wh = OS::get_singleton()->get_window_size().y / sc;
 					WKWebView* m_webView = [[WKWebView alloc] initWithFrame:NSMakeRect(rect.position.x / sc, wh - rect.position.y / sc - rect.size.height / sc, rect.size.width / sc, rect.size.height / sc) configuration:webViewConfig];
 
 					[m_webView setNavigationDelegate:nav_handle];
@@ -154,7 +154,7 @@ void WebViewOverlay::_notification(int p_what) {
 			if (m_webView != nullptr) {
 				float sc = OS::get_singleton()->get_screen_max_scale();
 				Rect2i rect = get_window_rect();
-				float wh = OS::get_singleton()->get_window_size().y;
+				float wh = OS::get_singleton()->get_window_size().y / sc;
 				[m_webView setFrame:NSMakeRect(rect.position.x / sc, wh - rect.position.y / sc - rect.size.height / sc, rect.size.width / sc, rect.size.height / sc)];
 			}
 		} break;
@@ -182,8 +182,12 @@ void WebViewOverlay::get_snapshot(int p_width) {
 	WKWebView* m_webView = (WKWebView* )native_view;
 	WKSnapshotConfiguration *wkSnapshotConfig = [[WKSnapshotConfiguration alloc] init];
 	wkSnapshotConfig.snapshotWidth = [NSNumber numberWithInt:p_width];
-	
+
+#ifdef OSX_ENABLED
 	[m_webView takeSnapshotWithConfiguration:wkSnapshotConfig completionHandler:^(NSImage * _Nullable image, NSError * _Nullable error) {
+#else
+	[m_webView takeSnapshotWithConfiguration:wkSnapshotConfig completionHandler:^(UIImage * _Nullable image, NSError * _Nullable error) {
+#endif
 		if (image != nullptr) {
 			CGImageRef imageRef = [image CGImage];
 			NSUInteger width = CGImageGetWidth(imageRef);
