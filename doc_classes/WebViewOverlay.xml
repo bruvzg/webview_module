@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="WebViewOverlay" inherits="Control" version="3.2">
+	<brief_description>
+		Control that displays web pages (HTML / CSS / JavaScript).
+	</brief_description>
+	<description>
+		WebViewOverlay control uses the following native backends:
+		* macOS: WKWebView
+		* Windows: Microsoft Edge WebView2 (WIP)
+
+		WebViewOverlay supports "res://" and "user://" custom schemes to access Godot virtual file system and "gdscript://" scheme for callbacks.
+
+		WebViewOverlay is rendered on top of the main window and have some restrictions:
+		* Control should be used only in the main 2D viewport.
+		* Control is always rendered on top of other controls / nodes.
+		* Rotation or scale are ignored.
+		* Shaders / materials, modulate and light mask are ignored.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="can_go_back" qualifiers="const">
+			<return type="bool">
+			</return>
+			<description>
+				Returns [code]true[/code], if it is possible to navigate backward.
+			</description>
+		</method>
+		<method name="can_go_forward" qualifiers="const">
+			<return type="bool">
+			</return>
+			<description>
+				Returns [code]true[/code], if it is possible to navigate forward.
+			</description>
+		</method>
+		<method name="execute_java_script">
+			<return type="void">
+			</return>
+			<argument index="0" name="script" type="String">
+			</argument>
+			<description>
+				Runs the given JavaScript code asynchronously, script return value is ignored.
+			</description>
+		</method>
+		<method name="get_snapshot">
+			<return type="void">
+			</return>
+			<argument index="0" name="width" type="int">
+			</argument>
+			<description>
+				Generates an image from the page's contents asynchronously. Snapshot can be taken from the hidden control as well.
+				When the image is ready, [code]snapshot_ready[/code] signal is emitted.
+
+				Note: Snapshots do not include external media content (e.g. YouTube videos) and scrollbars.
+			</description>
+		</method>
+		<method name="get_title" qualifiers="const">
+			<return type="String">
+			</return>
+			<description>
+				Returns current page title string.
+			</description>
+		</method>
+		<method name="go_back">
+			<return type="void">
+			</return>
+			<description>
+				Navigates back, if possible.
+			</description>
+		</method>
+		<method name="go_forward">
+			<return type="void">
+			</return>
+			<description>
+				Navigates forward, if possible.
+			</description>
+		</method>
+		<method name="is_loading" qualifiers="const">
+			<return type="bool">
+			</return>
+			<description>
+				Returns [code]true[/code] if current page is loading.
+			</description>
+		</method>
+		<method name="is_secure_content" qualifiers="const">
+			<return type="bool">
+			</return>
+			<description>
+				Returns [code]true[/code] if all resources on the current page are loaded through the encrypted connection.
+			</description>
+		</method>
+		<method name="load_string">
+			<return type="void">
+			</return>
+			<argument index="0" name="source" type="String">
+			</argument>
+			<argument index="1" name="url" type="String">
+			</argument>
+			<description>
+				Loads page from the [code]source[/code] string. [code]url[/code] is used to resolve relative URLs within the [code]source[/code] string.
+			</description>
+		</method>
+		<method name="reload">
+			<return type="void">
+			</return>
+			<description>
+				Reloads current page.
+			</description>
+		</method>
+		<method name="stop">
+			<return type="void">
+			</return>
+			<description>
+				Stops current page loading process.
+			</description>
+		</method>
+	</methods>
+	<members>
+		<member name="no_background" type="bool" setter="set_no_background" getter="get_no_background" default="false">
+			If [code]true[/code], control background can be transparent.
+		</member>
+		<member name="url" type="String" setter="set_url" getter="get_url" default="&quot;&quot;">
+			The URL of the current page.
+		</member>
+		<member name="user_agent" type="String" setter="set_user_agent" getter="get_user_agent" default="&quot;&quot;">
+			The custom user agent string.
+		</member>
+		<member name="zoom_level" type="float" setter="set_zoom_level" getter="get_zoom_level" default="1.0">
+			The zoom factor of the page.
+		</member>
+	</members>
+	<signals>
+		<signal name="callback">
+			<argument index="0" name="url" type="String">
+			</argument>
+			<description>
+				Emitted when request for the [code]gdscript://*[/code] URL is received.
+			</description>
+		</signal>
+		<signal name="finish_navigation">
+			<description>
+				Emitted when page loading process is finished.
+			</description>
+		</signal>
+		<signal name="snapshot_ready">
+			<argument index="0" name="image" type="Image">
+			</argument>
+			<description>
+				Emitted when page snapshot image is ready to use.
+			</description>
+		</signal>
+		<signal name="start_navigation">
+			<description>
+				Emitted when page loading process is started.
+			</description>
+		</signal>
+	</signals>
+	<constants>
+	</constants>
+</class>
