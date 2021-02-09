@@ -31,6 +31,8 @@ void WebViewOverlay::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("load_string", "source", "url"), &WebViewOverlay::load_string);
 	ClassDB::bind_method(D_METHOD("execute_java_script", "script"), &WebViewOverlay::execute_java_script);
 
+	ClassDB::bind_method(D_METHOD("get_snapshot", "width"), &WebViewOverlay::get_snapshot);
+
 	ClassDB::bind_method(D_METHOD("get_title"), &WebViewOverlay::get_title);
 
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "no_background"), "set_no_background", "get_no_background");
@@ -41,5 +43,6 @@ void WebViewOverlay::_bind_methods() {
 	ADD_SIGNAL(MethodInfo("callback", PropertyInfo(Variant::STRING, "url")));
 	ADD_SIGNAL(MethodInfo("start_navigation"));
 	ADD_SIGNAL(MethodInfo("finish_navigation"));
+	ADD_SIGNAL(MethodInfo("snapshot_ready", PropertyInfo(Variant::OBJECT, "image", PROPERTY_HINT_RESOURCE_TYPE, "Image")));
 }
 

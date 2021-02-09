@@ -178,6 +178,36 @@ void WebViewOverlay::_notification(int p_what) {
 	}
 }
 
+void WebViewOverlay::get_snapshot(int p_width) {
+	WKWebView* m_webView = (WKWebView* )native_view;
+	WKSnapshotConfiguration *wkSnapshotConfig = [[WKSnapshotConfiguration alloc] init];
+	wkSnapshotConfig.snapshotWidth = [NSNumber numberWithInt:p_width];
+	
+	[m_webView takeSnapshotWithConfiguration:wkSnapshotConfig completionHandler:^(NSImage * _Nullable image, NSError * _Nullable error) {
+		if (image != nullptr) {
+			CGImageRef imageRef = [image CGImage];
+			NSUInteger width = CGImageGetWidth(imageRef);
+			NSUInteger height = CGImageGetHeight(imageRef);
+
+			PoolVector<uint8_t> imgdata;
+			imgdata.resize(width * height * 4);
+			PoolVector<uint8_t>::Write wr = imgdata.write();
+
+			NSUInteger bytesPerPixel = 4;
+			NSUInteger bytesPerRow = bytesPerPixel * width;
+			NSUInteger bitsPerComponent = 8;
+			CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+			CGContextRef context = CGBitmapContextCreate(wr.ptr(), width, height, bitsPerComponent, bytesPerRow, colorSpace, kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+			CGColorSpaceRelease(colorSpace);
+
+			CGContextDrawImage(context, CGRectMake(0, 0, width, height), imageRef);
+			CGContextRelease(context);
+
+			emit_signal("snapshot_ready", memnew(Image(width, height, false, Image::FORMAT_RGBA8, imgdata)));
+		}
+	}];
+}
+
 void WebViewOverlay::set_no_background(bool p_bg) {
 	no_background = p_bg;
 	WKWebView* m_webView = (WKWebView* )native_view;

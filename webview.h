@@ -43,6 +43,8 @@ public:
 	void load_string(const String &p_source, const String &p_url);
 	void execute_java_script(const String &p_script);
 
+	void get_snapshot(int p_width);
+
 	bool can_go_back() const;
 	bool can_go_forward() const;
 	bool is_loading() const;
