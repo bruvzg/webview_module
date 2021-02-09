@@ -1,0 +1,21 @@
+#!/usr/bin/env python
+
+Import("env")
+Import("env_modules")
+
+env_native_webview = env_modules.Clone()
+env_native_webview.disable_warnings()
+
+env_native_webview.add_source_files(env.modules_sources, "register_types.cpp")
+env_native_webview.add_source_files(env.modules_sources, "webview_common.cpp")
+
+if env["platform"] == "osx" or env["platform"] == "iphone" or env["platform"] == "tvos":
+	env.Append(LINKFLAGS=["-framework", "WebKit"])
+	env_native_webview.add_source_files(env.modules_sources, "webview_wk.mm")
+
+elif env["platform"] == "windows":
+	env.Append(LINKFLAGS=["-lWebView2Loader"])
+	env_native_webview.add_source_files(env.modules_sources, "webview_edge.cpp")
+
+else:
+	env_native_webview.add_source_files(env.modules_sources, "webview_dummy.cpp")
