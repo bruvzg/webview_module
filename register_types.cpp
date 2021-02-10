@@ -11,6 +11,9 @@
 
 void register_webview_module_types() {
 	ClassDB::register_class<WebViewOverlay>();
+	WebViewOverlay::init();
 }
 
-void unregister_webview_module_types() {}
+void unregister_webview_module_types() {
+	WebViewOverlay::finish();
+}

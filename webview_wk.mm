@@ -11,13 +11,23 @@
 
 /*************************************************************************/
 
-@interface GDWKNavigationDelegate: NSObject <WKNavigationDelegate> {
+@interface GDWKNavigationDelegate: NSObject <WKNavigationDelegate, WKUIDelegate> {
 	WebViewOverlay *control;
 }
 - (void)setControl:(WebViewOverlay *)p_control;
 @end
 
 @implementation GDWKNavigationDelegate
+
+- (WKWebView *)webView:(WKWebView *)webView createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration forNavigationAction:(WKNavigationAction *)navigationAction windowFeatures:(WKWindowFeatures *)windowFeatures {
+	if (control != nullptr) {
+		NSURL *requestURL = navigationAction.request.URL;
+		NSString *ns = [requestURL absoluteString];
+		String url = String::utf8([ns UTF8String]);
+		control->emit_signal("new_window", url);
+	}
+	return nil;
+}
 
 - (void)setControl:(WebViewOverlay *)p_control {
 	control = p_control;
@@ -95,12 +105,12 @@
 void WebViewOverlay::_notification(int p_what) {
 	switch (p_what) {
 		case NOTIFICATION_ENTER_TREE: {
-			if (!Engine::get_singleton()->is_editor_hint()) {
+			if (!Engine::get_singleton()->is_editor_hint() && (err_status == 0)) {
 				set_process_internal(true); // Wait for window to init, do not init in editor.
 			}
 		} break;
 		case NOTIFICATION_INTERNAL_PROCESS: {
-			if (!Engine::get_singleton()->is_editor_hint() && (native_view == nullptr)) {
+			if (!Engine::get_singleton()->is_editor_hint() && (native_view == nullptr) && (err_status == 0)) {
 #ifdef OSX_ENABLED
 				NSView *main_view = [[[NSApplication sharedApplication] mainWindow] contentView];
 #else
@@ -124,6 +134,7 @@ void WebViewOverlay::_notification(int p_what) {
 					WKWebView* m_webView = [[WKWebView alloc] initWithFrame:NSMakeRect(rect.position.x / sc, wh - rect.position.y / sc - rect.size.height / sc, rect.size.width / sc, rect.size.height / sc) configuration:webViewConfig];
 
 					[m_webView setNavigationDelegate:nav_handle];
+					[m_webView setUIDelegate:nav_handle];
 					if (user_agent.length() > 0) {
 						[m_webView setCustomUserAgent:[NSString stringWithUTF8String:user_agent.utf8().get_data()]];
 					} else {
@@ -137,15 +148,26 @@ void WebViewOverlay::_notification(int p_what) {
 					[m_webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:[NSString stringWithUTF8String:home_url.utf8().get_data()]]]];
 
 					native_view = m_webView;
+					ctrl_err_status = 0;
+
 					set_process_internal(false);
 				}
 			}
 		} break;
 		case NOTIFICATION_DRAW: {
-			if (Engine::get_singleton()->is_editor_hint()) {
-				Size2i size = get_size();
-				draw_rect(Rect2(Point2(), size), Color(1, 1, 1), false);
-				draw_string(get_font("font", "Label"), Point2(10, 10), home_url, Color(1, 1, 1));
+			if (err_status != 0) {
+				switch (err_status) {
+					case -1: {
+						_draw_error("WebView interface no initialized.");
+					} break;
+					default: {
+						_draw_error("Unknown error.");
+					} break;
+				};
+			} else if (ctrl_err_status > 0) {
+				_draw_error("Unknown control error.");
+			} else if (Engine::get_singleton()->is_editor_hint()) {
+				_draw_placeholder();
 			}
 		} FALLTHROUGH;
 		case NOTIFICATION_MOVED_IN_PARENT:
@@ -182,6 +204,7 @@ void WebViewOverlay::get_snapshot(int p_width) {
 	WKWebView* m_webView = (WKWebView* )native_view;
 	WKSnapshotConfiguration *wkSnapshotConfig = [[WKSnapshotConfiguration alloc] init];
 	wkSnapshotConfig.snapshotWidth = [NSNumber numberWithInt:p_width];
+	wkSnapshotConfig.afterScreenUpdates = NO;
 
 #ifdef OSX_ENABLED
 	[m_webView takeSnapshotWithConfiguration:wkSnapshotConfig completionHandler:^(NSImage * _Nullable image, NSError * _Nullable error) {
@@ -315,7 +338,7 @@ bool WebViewOverlay::is_loading() const {
 	return [m_webView loading];
 }
 
-bool  WebViewOverlay::is_secure_content() const {
+bool WebViewOverlay::is_secure_content() const {
 	ERR_FAIL_COND_V(native_view == nullptr, false);
 	WKWebView* m_webView = (WKWebView* )native_view;
 	return [m_webView hasOnlySecureContent];
@@ -343,4 +366,12 @@ void WebViewOverlay::stop() {
 	ERR_FAIL_COND(native_view == nullptr);
 	WKWebView* m_webView = (WKWebView* )native_view;
 	[m_webView stopLoading];
+}
+
+void WebViewOverlay::init() {
+	err_status = 0;
+}
+
+void WebViewOverlay::finish() {
+	//NOP
 }

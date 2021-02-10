@@ -13,16 +13,23 @@ class WebViewOverlay : public Control {
 	GDCLASS(WebViewOverlay, Control);
 
 	void *native_view = nullptr;
-	void *native_view_controller = nullptr;
 
 	String home_url;
 	String user_agent;
 	double zoom = 1.0f;
 	bool no_background = false;
+	int ctrl_err_status = -1;
+	static int err_status;
+
+	Ref<ImageTexture> icon_main;
+	Ref<ImageTexture> icon_error;
 
 protected:
 	void _notification(int p_what);
 	static void _bind_methods();
+
+	void _draw_placeholder();
+	void _draw_error(const String &p_error);
 
 public:
 
@@ -53,6 +60,9 @@ public:
 	void go_forward();
 	void reload();
 	void stop();
+
+	static void init();
+	static void finish();
 
 };
 

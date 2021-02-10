@@ -14,7 +14,6 @@ if env["platform"] == "osx" or env["platform"] == "iphone" or env["platform"] ==
 	env_native_webview.add_source_files(env.modules_sources, "webview_wk.mm")
 
 elif env["platform"] == "windows":
-	env.Append(LINKFLAGS=["-lWebView2Loader"])
 	env_native_webview.add_source_files(env.modules_sources, "webview_edge.cpp")
 
 else:

@@ -51,7 +51,7 @@
 				Generates an image from the page's contents asynchronously. Snapshot can be taken from the hidden control as well.
 				When the image is ready, [code]snapshot_ready[/code] signal is emitted.
 
-				Note: Snapshots do not include external media content (e.g. YouTube videos) and scrollbars.
+				Note: Snapshots do not support media content (e.g. videos), WebGL content, CSS 3D transforms and do not include scrollbars.
 			</description>
 		</method>
 		<method name="get_title" qualifiers="const">
@@ -140,6 +140,13 @@
 		<signal name="finish_navigation">
 			<description>
 				Emitted when page loading process is finished.
+			</description>
+		</signal>
+		<signal name="new_window">
+			<argument index="0" name="url" type="String">
+			</argument>
+			<description>
+				Emitted when page is opened in the new window.
 			</description>
 		</signal>
 		<signal name="snapshot_ready">
