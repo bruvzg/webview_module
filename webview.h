@@ -9,10 +9,11 @@
 
 /*************************************************************************/
 
+class WebViewOverlayImplementation;
 class WebViewOverlay : public Control {
 	GDCLASS(WebViewOverlay, Control);
 
-	void *native_view = nullptr;
+	WebViewOverlayImplementation *data;
 
 	String home_url;
 	String user_agent;
@@ -32,6 +33,8 @@ protected:
 	void _draw_error(const String &p_error);
 
 public:
+	WebViewOverlay();
+	~WebViewOverlay();
 
 	void set_no_background(bool p_bg);
 	bool get_no_background() const;
@@ -63,7 +66,6 @@ public:
 
 	static void init();
 	static void finish();
-
 };
 
 #endif // WEB_VIEW_H

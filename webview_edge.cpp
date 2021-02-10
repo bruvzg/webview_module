@@ -5,16 +5,30 @@
 #include "webview.h"
 #include "core/os/os.h"
 
+#include <shlwapi.h>
 #include <Webview2.h>
 #include <Objbase.h>
+#include <wrl/client.h>
+
+using namespace Microsoft::WRL;
 
 typedef HRESULT (WINAPI *CreateCoreWebView2EnvironmentWithOptionsPtr)(PCWSTR p_browser_executable_folder, PCWSTR p_user_data_folder, ICoreWebView2EnvironmentOptions* p_environment_options, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* r_environment_created_handler);
-CreateCoreWebView2EnvironmentWithOptionsPtr CreateCoreWebView2EnvironmentWithOptions = nullptr;
+CreateCoreWebView2EnvironmentWithOptionsPtr webview_CreateCoreWebView2EnvironmentWithOptions = nullptr;
 
-class WebViewOverlayDelegate() {
+class WebViewOverlayDelegate :
+	public ICoreWebView2CreateCoreWebView2ControllerCompletedHandler,
+	public ICoreWebView2NavigationStartingEventHandler,
+	public ICoreWebView2NavigationCompletedEventHandler,
+	public ICoreWebView2NewWindowRequestedEventHandler,
+	public ICoreWebView2WebResourceRequestedEventHandler,
+	public ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler,
+	public ICoreWebView2CapturePreviewCompletedHandler {
 public:
 	WebViewOverlay *control = nullptr;
 	HWND hwnd = nullptr;
+
+	ComPtr<IStream> img_data_stream = nullptr;
+	LONG _cRef = 1;
 
 	bool is_loading = false;
 
@@ -27,7 +41,25 @@ public:
 	EventRegistrationToken new_window_token = {};
 	EventRegistrationToken resource_requested_token = {};
 
-	HRESULT navigation_start_cb(ICoreWebView2* p_sender, ICoreWebView2NavigationStartingEventArgs* p_args) {
+	ULONG STDMETHODCALLTYPE AddRef() {
+		return InterlockedIncrement(&_cRef);
+	}
+
+	ULONG STDMETHODCALLTYPE Release() {
+		ULONG ulRef = InterlockedDecrement(&_cRef);
+		if (0 == ulRef) {
+			delete this;
+		}
+		return ulRef;
+	}
+
+	HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, VOID **ppvInterface) {
+		AddRef();
+		*ppvInterface = this;
+		return S_OK;
+	}
+
+	HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2* p_sender, ICoreWebView2NavigationStartingEventArgs* p_args) {
 		if (control != nullptr) {
 			control->emit_signal("start_navigation");
 		}
@@ -35,7 +67,7 @@ public:
 		return S_OK;
 	}
 
-	HRESULT navigation_completed_cb(ICoreWebView2* p_sender, ICoreWebView2NavigationCompletedEventArgs* p_args) {
+	HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2* p_sender, ICoreWebView2NavigationCompletedEventArgs* p_args) {
 		if (control != nullptr) {
 			control->emit_signal("finish_navigation");
 		}
@@ -43,21 +75,21 @@ public:
 		return S_OK;
 	}
 
-	HRESULT new_window_cb(ICoreWebView2* p_sender, ICoreWebView2NewWindowRequestedEventArgs* p_args) {
-		ComPtr<LPWSTR> uri;
-		p_args->get_Uri(&uri)
+	HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2* p_sender, ICoreWebView2NewWindowRequestedEventArgs* p_args) {
+		LPWSTR uri;
+		p_args->get_Uri(&uri);
 		ERR_FAIL_COND_V(uri == nullptr, S_OK);
-		String result = String(uri.Get());
+		String result = String(uri);
 
 		control->emit_signal("new_window", result);
 		return S_OK;
 	}
 
-	HRESULT resource_requested_cb(ICoreWebView2* p_sender, ICoreWebView2NewWindowRequestedEventArgs* p_args) {
-		ComPtr<IWebView2WebResourceRequest> req;
+	HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2* p_sender, ICoreWebView2WebResourceRequestedEventArgs* p_args) {
+		ComPtr<ICoreWebView2WebResourceRequest> req;
 		p_args->get_Request(&req);
 
-		ComPtr<LPWSTR> uri;
+		LPWSTR uri;
 		req->get_Uri(&uri);
 		String url = String(uri);
 
@@ -65,7 +97,7 @@ public:
 			Error err;
 			FileAccess *f = FileAccess::open(url, FileAccess::READ, &err);
 			if (err != OK) {
-				ComPtr<IWebView2WebResourceResponse> response;
+				ComPtr<ICoreWebView2WebResourceResponse> response;
 				env->CreateWebResourceResponse(nullptr, 404, L"Not found", L"", &response);
 				p_args->put_Response(response.Get());
 			} else {
@@ -75,10 +107,10 @@ public:
 
 				ComPtr<IStream> data_stream = SHCreateMemStream((const BYTE *)data.read().ptr(), data.size());
 
-				ComPtr<IWebView2WebResourceResponse> response;
+				ComPtr<ICoreWebView2WebResourceResponse> response;
 				env->CreateWebResourceResponse(data_stream.Get(), 200, L"OK", L"", &response);
 
-				ComPtr<IWebView2HttpResponseHeaders> headers;
+				ComPtr<ICoreWebView2HttpResponseHeaders> headers;
 				response->get_Headers(&headers);
 				headers->AppendHeader(L"Content-Type", L"text/html");
 				headers->AppendHeader(L"Content-Length", (LPCWSTR)itos(data.size()).c_str());
@@ -90,62 +122,85 @@ public:
 				control->emit_signal("callback", url);
 			}
 
-			ComPtr<IWebView2WebResourceResponse> response;
+			ComPtr<ICoreWebView2WebResourceResponse> response;
 			env->CreateWebResourceResponse(nullptr, 200, L"OK", L"", &response);
 
-			ComPtr<IWebView2HttpResponseHeaders> headers;
+			ComPtr<ICoreWebView2HttpResponseHeaders> headers;
 			response->get_Headers(&headers);
 			headers->AppendHeader(L"Content-Type", L"text/html");
 			headers->AppendHeader(L"Content-Length", L"0");
 			p_args->put_Response(response.Get());
 		} else {
-			ComPtr<IWebView2WebResourceResponse> response;
+			ComPtr<ICoreWebView2WebResourceResponse> response;
 			env->CreateWebResourceResponse(nullptr, 404, L"Not found", L"", &response);
 			p_args->put_Response(response.Get());
 		}
 		return S_OK;
 	}
 
-	HRESULT environment_created_cb(HRESULT p_result, ICoreWebView2Environment* p_environment) {
-		p_environment->QueryInterface(IID_PPV_ARGS(&env));
-		env->CreateCoreWebView2Controller(hwnd, Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(this, &WebViewOverlayDelegate::webview_created_cb).Get());
-		ComPtr<LPWSTR> version_info;
+	HRESULT STDMETHODCALLTYPE Invoke(HRESULT p_result, ICoreWebView2Environment* p_environment) {
+		env = p_environment;
+		env->CreateCoreWebView2Controller(hwnd, this);
+		LPWSTR version_info;
 		env->get_BrowserVersionString(&version_info);
-		printf("edge_version: %ws\n", version_info.Get());
+		printf("edge_version: %ws\n", version_info);
 
 		return S_OK;
 	}
 
-	HRESULT webview_created_cb(HRESULT p_result, ICoreWebView2Controller* p_controller) {
-		controller = p_controller
+	HRESULT STDMETHODCALLTYPE Invoke(HRESULT p_result, ICoreWebView2Controller* p_controller) {
+		controller = p_controller;
 		HRESULT hr = controller->get_CoreWebView2(&webview);
-		ERR_FAIL_COND(FAILED(hr));
+		ERR_FAIL_COND_V(FAILED(hr), S_OK);
 
-		webview->add_NavigationStarting(Callback<ICoreWebView2NavigationStartingEventHandler>(this, &WebViewOverlayDelegate::navigation_start_cb).Get(), &navigation_start_token);
-		webview->add_NavigationCompleted(Callback<ICoreWebView2NavigationCompletedEventHandler>(this, &WebViewOverlayDelegate::navigation_completed_cb).Get(), &navigation_completed_token);
-		webview->add_NewWindowRequested(Callback<ICoreWebView2NewWindowRequestedEventHandler>(this, &WebViewOverlayDelegate::new_window_cb).Get(), &new_window_token);
+		webview->add_NavigationStarting(this, &navigation_start_token);
+		webview->add_NavigationCompleted(this, &navigation_completed_token);
+		webview->add_NewWindowRequested(this, &new_window_token);
 
 		//custom schemes
-		webview->AddWebResourceRequestedFilter(L"res://*", WEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
-		webview->AddWebResourceRequestedFilter(L"user://*", WEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
-		webview->AddWebResourceRequestedFilter(L"gdscript://*", WEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
-		webview->add_WebResourceRequested(Callback<ICoreWebView2WebResourceRequestedEventHandler>(this, &WebViewOverlayDelegate::resource_requested_cb).Get(), &resource_requested_token);
+		webview->AddWebResourceRequestedFilter(L"res://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+		webview->AddWebResourceRequestedFilter(L"user://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+		webview->AddWebResourceRequestedFilter(L"gdscript://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+		webview->add_WebResourceRequested(this, &resource_requested_token);
 
 		return S_OK;
 	}
 
-	WebViewOverlayDelegate::WebViewOverlayDelegate(WebViewOverlay* p_control, HWND p_hwnd) {
+	HRESULT STDMETHODCALLTYPE Invoke(HRESULT p_error_code) {
+		if (img_data_stream != nullptr) {
+			STATSTG stats;
+			img_data_stream->Stat(&stats, STATFLAG_NONAME);
+			ULONG size = stats.cbSize.QuadPart;
+			ULONG bytes_read;
+
+			PoolVector<uint8_t> imgdata;
+			imgdata.resize(size);
+			PoolVector<uint8_t>::Write wr = imgdata.write();
+			img_data_stream->Read(wr.ptr(), size, &bytes_read);
+
+			Ref<Image> image;
+			image.instance();
+			image->load_png_from_buffer(imgdata);
+
+			control->emit_signal("snapshot_ready", image);
+
+			img_data_stream = nullptr;
+		}
+		return S_OK;
+	}
+
+	WebViewOverlayDelegate(WebViewOverlay* p_control, HWND p_hwnd) {
 		control = p_control;
 		hwnd = p_hwnd;
 
-		String exe_path = OS::get_singelton()->get_executable_path();
-		String cache_path = OS::get_singelton()->get_cache_path();
+		String exe_path = OS::get_singleton()->get_executable_path();
+		String cache_path = OS::get_singleton()->get_cache_path();
 
-		HRESULT hr = CreateCoreWebView2EnvironmentWithOptions((LPCWSTR)exe_path.c_str(), (LPCWSTR)cache_path.c_str(), nullptr, Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(this, &WebViewOverlay::environment_created_cb).Get());
+		HRESULT hr = webview_CreateCoreWebView2EnvironmentWithOptions((LPCWSTR)exe_path.c_str(), (LPCWSTR)cache_path.c_str(), nullptr, this);
 		ERR_FAIL_COND(FAILED(hr));
 	}
 
-	WebViewOverlayDelegate::~WebViewOverlayDelegate() {
+	~WebViewOverlayDelegate() {
 		if (webview) {
 			webview->remove_NavigationCompleted(navigation_completed_token);
 			webview->remove_NavigationStarting(navigation_start_token);
@@ -157,17 +212,20 @@ public:
 
 /*************************************************************************/
 
-BOOL CALLBACK enum_windows_callback(HWND handle, LPARAM lParam) {
-	HWND& wnd = *(HWND*)lParam;
-	GetWindowThreadProcessId(handle, &process_id);
-	if (GetCurrentProcessId() != process_id || !(GetWindow(handle, GW_OWNER) == (HWND)0 && IsWindowVisible(handle))) {
-		return TRUE;
-	}
-	wnd = handle;
-	return FALSE;
-}
+class WebViewOverlayImplementation {
+public:
+	WebViewOverlayDelegate *view = nullptr;
+};
 
 /*************************************************************************/
+
+WebViewOverlay::WebViewOverlay() {
+	data = memnew(WebViewOverlayImplementation());
+}
+
+WebViewOverlay::~WebViewOverlay() {
+	memdelete(data);
+}
 
 void WebViewOverlay::_notification(int p_what) {
 	switch (p_what) {
@@ -177,14 +235,13 @@ void WebViewOverlay::_notification(int p_what) {
 			}
 		} break;
 		case NOTIFICATION_INTERNAL_PROCESS: {
-			if (!Engine::get_singleton()->is_editor_hint() && (native_view == nullptr) && (err_status == 0)) {
-				HWND wnd = nullptr;
-				EnumWindows(enum_windows_callback, (LPARAM)&wnd);
-				if (wnd != nullptr) {
+			if (!Engine::get_singleton()->is_editor_hint() && (data->view == nullptr) && (err_status == 0)) {
+				HWND hwnd = (HWND)OS::get_singleton()->get_native_handle(OS::WINDOW_HANDLE);
+				if (hwnd != nullptr) {
 					float sc = OS::get_singleton()->get_screen_max_scale();
 					Rect2i rect = get_window_rect();
-					HWND ctrl_wnd = CreateWindowW(L"GodotWebViewControl", nullptr, WS_CHILD | WS_VISIBLE, rect.position.x / sc, rect.position.y / sc, rect.size.width / sc, rect.size.height / sc, hwnd, nullptr, GetModuleHandle(nullptr);, nullptr);
-					WebViewOverlayDelegate *webview = new(WebViewOverlayDelegate(this, ctrl_wnd));
+					HWND ctrl_wnd = CreateWindowW(L"GodotWebViewControl", nullptr, WS_CHILD | WS_VISIBLE, rect.position.x / sc, rect.position.y / sc, rect.size.width / sc, rect.size.height / sc, hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
+					WebViewOverlayDelegate *webview = new WebViewOverlayDelegate(this, ctrl_wnd);
 					if (user_agent.length() > 0) {
 						//TODO - available in unreleased ICoreWebView2ExperimentalSettings only
 					}
@@ -197,7 +254,7 @@ void WebViewOverlay::_notification(int p_what) {
 					rc.bottom = rc.top + rect.size.height / sc;
 					webview->controller->put_Bounds(rc);
 
-					webview->webview->put_ZoomFactor(zoom);
+					data->view->controller->put_ZoomFactor(zoom);
 					if (is_visible_in_tree()) {
 						ShowWindow(ctrl_wnd, SW_SHOW);
 						webview->controller->put_IsVisible(TRUE);
@@ -205,8 +262,8 @@ void WebViewOverlay::_notification(int p_what) {
 						webview->controller->put_IsVisible(FALSE);
 						ShowWindow(ctrl_wnd, SW_HIDE);
 					}
-					webview->webview->Navigate((LPCWSTR)p_url.c_str());
-					native_view = webview;
+					data->view->webview->Navigate((LPCWSTR)home_url.c_str());
+					data->view = webview;
 					ctrl_err_status = 0;
 
 					set_process_internal(false);
@@ -237,39 +294,36 @@ void WebViewOverlay::_notification(int p_what) {
 		} break;
 		case NOTIFICATION_MOVED_IN_PARENT:
 		case NOTIFICATION_RESIZED: {
-			if (native_view == nullptr) {
+			if (data->view == nullptr) {
 				float sc = OS::get_singleton()->get_screen_max_scale();
 				Rect2i rect = get_window_rect();
-				WebViewOverlayDelegate *webview = (WebViewOverlayDelegate *)native_view;
-				SetWindowPos(webview->hwnd, 0, rect.position.x / sc, rect.position.y / sc , rect.size.width / sc, rect.size.height / sc, SWP_NOACTIVATE | SWP_NOZORDER);
+				SetWindowPos(data->view->hwnd, 0, rect.position.x / sc, rect.position.y / sc , rect.size.width / sc, rect.size.height / sc, SWP_NOACTIVATE | SWP_NOZORDER);
 
 				RECT rc;
 				rc.left = rect.position.x / sc;
 				rc.top = rect.position.y / sc;
 				rc.right = rc.left + rect.size.width / sc;
 				rc.bottom = rc.top + rect.size.height / sc;
-				webview->controller->put_Bounds(rc);
+				data->view->controller->put_Bounds(rc);
 			}
 		} break;
 		case NOTIFICATION_VISIBILITY_CHANGED: {
-			if (native_view == nullptr) {
-				WebViewOverlayDelegate *webview = (WebViewOverlayDelegate *)native_view;
+			if (data->view == nullptr) {
 				if (is_visible_in_tree()) {
-					ShowWindow(webview->hwnd, SW_SHOW);
-					webview->controller->put_IsVisible(TRUE);
+					ShowWindow(data->view->hwnd, SW_SHOW);
+					data->view->controller->put_IsVisible(TRUE);
 				} else {
-					webview->controller->put_IsVisible(FALSE);
-					ShowWindow(webview->hwnd, SW_HIDE);
+					data->view->controller->put_IsVisible(FALSE);
+					ShowWindow(data->view->hwnd, SW_HIDE);
 				}
 			}
 		} break;
 		case NOTIFICATION_EXIT_TREE: {
-			if (native_view == nullptr) {
-				WebViewOverlayDelegate *webview = (WebViewOverlayDelegate *)native_view;
-				HWND ctrl_wnd = webview->hwnd;
-				delete webview;
+			if (data->view == nullptr) {
+				HWND ctrl_wnd = data->view->hwnd;
+				delete data->view;
 				DestroyWindow(ctrl_wnd);
-				native_view = nullptr;
+				data->view = nullptr;
 			}
 		} break;
 		default: {
@@ -279,30 +333,12 @@ void WebViewOverlay::_notification(int p_what) {
 }
 
 void WebViewOverlay::get_snapshot(int p_width) {
-	ERR_FAIL_COND(native_view == nullptr);
+	ERR_FAIL_COND(data->view == nullptr);
 
-	WebViewOverlayDelegate *webview = (WebViewOverlayDelegate *)native_view;
-
-	ComPtr<IStream> data_stream = SHCreateMemStream(nullptr, 0);
-	webview->webview->CapturePreview(WEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, data_stream.Get(), Callback<IWebView2CapturePreviewCompletedHandler>([](HRESULT error_code) -> HRESULT {
-		STATSTG stats;
-		data_stream->Stat(&stats, STATFLAG_NONAME);
-		ULONG size = stats.cbSize.QuadPart;
-		ULONG bytes_read;
-
-		PoolVector<uint8_t> imgdata;
-		imgdata.resize(size);
-		PoolVector<uint8_t>::Write wr = imgdata.write();
-		data_stream->Read(wr.ptr(), size, &bytes_read);
-
-		Ref<Image> image;
-		image.instance();
-		image->load_png_from_buffer(imgdata);
-
-		emit_signal("snapshot_ready", image);
-
-		return S_OK;
-	}).Get());
+	if (data->view->img_data_stream == nullptr) {
+		data->view->img_data_stream = SHCreateMemStream(nullptr, 0);
+		data->view->webview->CapturePreview(COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, data->view->img_data_stream.Get(), data->view);
+	}
 }
 
 void WebViewOverlay::set_no_background(bool p_bg) {
@@ -316,20 +352,18 @@ bool WebViewOverlay::get_no_background() const {
 
 void WebViewOverlay::set_url(const String& p_url) {
 	home_url = p_url;
-	if (native_view == nullptr) {
-		WebViewOverlayDelegate *webview = (WebViewOverlayDelegate *)native_view;
-		webview->webview->Navigate((LPCWSTR)p_url.c_str());
+	if (data->view == nullptr) {
+		data->view->webview->Navigate((LPCWSTR)p_url.c_str());
 	}
 }
 
 String WebViewOverlay::get_url() const {
-	if (native_view == nullptr) {
-		WebViewOverlayDelegate *webview = (WebViewOverlayDelegate *)native_view;
-		ComPtr<LPWSTR> uri;
-		webview->webview->get_Source(&uri);
-		ERR_FAIL_COND_V(uri.Get() == nullptr, "");
+	if (data->view == nullptr) {
+		LPWSTR uri;
+		data->view->webview->get_Source(&uri);
+		ERR_FAIL_COND_V(uri == nullptr, "");
 
-		String result = String(uri.Get());
+		String result = String(uri);
 		return result;
 	}
 
@@ -347,104 +381,94 @@ String WebViewOverlay::get_user_agent() const {
 }
 
 double WebViewOverlay::get_zoom_level() const {
-	if (native_view == nullptr) {
-		WebViewOverlayDelegate *webview = (WebViewOverlayDelegate *)native_view;
-		webview->webview->get_ZoomFactor(&zoom);
+	if (data->view == nullptr) {
+		double _zoom;
+		data->view->controller->get_ZoomFactor(&_zoom);
+		return _zoom;
 	}
 	return zoom;
 }
 
 void WebViewOverlay::set_zoom_level(double p_zoom) {
 	zoom = p_zoom;
-	if (native_view == nullptr) {
-		WebViewOverlayDelegate *webview = (WebViewOverlayDelegate *)native_view;
-		webview->webview->put_ZoomFactor(zoom);
+	if (data->view == nullptr) {
+		data->view->controller->put_ZoomFactor(zoom);
 	}
 }
 
 String WebViewOverlay::get_title() const {
-	ERR_FAIL_COND_V(native_view == nullptr, "");
-	WebViewOverlayDelegate *webview = (WebViewOverlayDelegate *)native_view;
+	ERR_FAIL_COND_V(data->view == nullptr, "");
 	
-	ComPtr<LPWSTR> title;
-	webview->webview->get_DocumentTitle(&title);
-	ERR_FAIL_COND_V(title.Get() == nullptr, "");
-	String result = String(title.Get());
+	LPWSTR title;
+	data->view->webview->get_DocumentTitle(&title);
+	ERR_FAIL_COND_V(title == nullptr, "");
+	String result = String(title);
 
 	return result;
 }
 
 void WebViewOverlay::execute_java_script(const String &p_script) {
-	ERR_FAIL_COND(native_view == nullptr);
+	ERR_FAIL_COND(data->view == nullptr);
 
-	WebViewOverlayDelegate *webview = (WebViewOverlayDelegate *)native_view;
-	webview->webview->ExecuteScript((LPCWSTR)p_script.c_str(), nullptr);
+	data->view->webview->ExecuteScript((LPCWSTR)p_script.c_str(), nullptr);
 }
 
 void WebViewOverlay::load_string(const String &p_source, const String &p_url) {
-	ERR_FAIL_COND(native_view == nullptr);
-	WebViewOverlayDelegate *webview = (WebViewOverlayDelegate *)native_view;
-	webview->webview->NavigateString((LPCWSTR)p_source.c_str());
+	ERR_FAIL_COND(data->view == nullptr);
+	data->view->webview->NavigateToString((LPCWSTR)p_source.c_str());
 	//TODO any way to set URL ???
 }
 
 bool WebViewOverlay::can_go_back() const {
-	ERR_FAIL_COND_V(native_view == nullptr, false);
-	WebViewOverlayDelegate *webview = (WebViewOverlayDelegate *)native_view;
+	ERR_FAIL_COND_V(data->view == nullptr, false);
 	BOOL result = false;
-	webview->webview->get_CanGoBack(&result);
+	data->view->webview->get_CanGoBack(&result);
 	return result;
 }
 
 bool WebViewOverlay::can_go_forward() const {
-	ERR_FAIL_COND_V(native_view == nullptr, false);
-	WebViewOverlayDelegate *webview = (WebViewOverlayDelegate *)native_view;
+	ERR_FAIL_COND_V(data->view == nullptr, false);
 	BOOL result = false;
-	webview->webview->get_CanGoForward(&result);
+	data->view->webview->get_CanGoForward(&result);
 	return result;
 }
 
 bool WebViewOverlay::is_loading() const {
-	ERR_FAIL_COND_V(native_view == nullptr, false);
-	WebViewOverlayDelegate *webview = (WebViewOverlayDelegate *)native_view;
-	return webview->is_loading;
+	ERR_FAIL_COND_V(data->view == nullptr, false);
+	return data->view->is_loading;
 }
 
 bool WebViewOverlay::is_secure_content() const {
-	ERR_FAIL_COND_V(native_view == nullptr, false);
+	ERR_FAIL_COND_V(data->view == nullptr, false);
 	//TODO not supported ???
 	return false;
 }
 
 void WebViewOverlay::go_back() {
-	ERR_FAIL_COND(native_view == nullptr);
-	WebViewOverlayDelegate *webview = (WebViewOverlayDelegate *)native_view;
-	webview->webview->get_GoBack();
+	ERR_FAIL_COND(data->view == nullptr);
+	data->view->webview->GoBack();
 }
 
 void WebViewOverlay::go_forward() {
-	ERR_FAIL_COND(native_view == nullptr);
-	WebViewOverlayDelegate *webview = (WebViewOverlayDelegate *)native_view;
-	webview->webview->get_GoForward();
+	ERR_FAIL_COND(data->view == nullptr);
+	data->view->webview->GoForward();
 }
 
 void WebViewOverlay::reload() {
-	ERR_FAIL_COND(native_view == nullptr);
-	WebViewOverlayDelegate *webview = (WebViewOverlayDelegate *)native_view;
-	webview->webview->Reload();
+	ERR_FAIL_COND(data->view == nullptr);
+	data->view->webview->Reload();
 }
 
 void WebViewOverlay::stop() {
-	ERR_FAIL_COND(native_view == nullptr);
-	WebViewOverlayDelegate *webview = (WebViewOverlayDelegate *)native_view;
-	webview->webview->Stop();
+	ERR_FAIL_COND(data->view == nullptr);
+	data->view->webview->Stop();
 }
 
 void WebViewOverlay::init() {
 	HMODULE wv2_lib = LoadLibraryW(L"WebView2Loader.dll");
 	if (wv2_lib) {
-		CreateCoreWebView2EnvironmentWithOptions = (CreateCoreWebView2EnvironmentWithOptionsPtr)GetProcAddress(vw2_lib, "CreateCoreWebView2EnvironmentWithOptions");
-		if (CreateCoreWebView2EnvironmentWithOptions != nullptr) {
+		webview_CreateCoreWebView2EnvironmentWithOptions = (CreateCoreWebView2EnvironmentWithOptionsPtr)GetProcAddress(wv2_lib, "CreateCoreWebView2EnvironmentWithOptions");
+		if (webview_CreateCoreWebView2EnvironmentWithOptions != nullptr) {
 			err_status = 0;
 		} else {
 			err_status = 2;
