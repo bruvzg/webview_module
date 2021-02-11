@@ -185,7 +185,7 @@ void WebViewOverlay::_notification(int p_what) {
 			if (err_status != 0) {
 				switch (err_status) {
 					case -1: {
-						_draw_error("WebView interface no initialized.");
+						_draw_error("WebView interface not initialized.");
 					} break;
 					default: {
 						_draw_error("Unknown error.");

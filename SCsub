@@ -17,5 +17,13 @@ elif env["platform"] == "windows":
 	env_native_webview.Append(CPPPATH=["redist"])
 	env_native_webview.add_source_files(env.modules_sources, "webview_edge.cpp")
 
+elif env["platform"] == "x11":
+	env.ParseConfig("pkg-config gtk+-3.0 webkit2gtk-4.0 --libs")
+	# TODO remove --libs and load dynamicaly
+
+	env_native_webview.ParseConfig("pkg-config gtk+-3.0 webkit2gtk-4.0 --cflags")
+	env_native_webview.add_source_files(env.modules_sources, "webview_gtk.cpp")
+
 else:
 	env_native_webview.add_source_files(env.modules_sources, "webview_dummy.cpp")
+
