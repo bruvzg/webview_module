@@ -17,13 +17,21 @@
 
 /*************************************************************************/
 
-@interface GDWKNavigationDelegate: NSObject <WKNavigationDelegate, WKUIDelegate> {
+@interface GDWKNavigationDelegate: NSObject <WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler> {
 	WebViewOverlay *control;
 }
 - (void)setControl:(WebViewOverlay *)p_control;
 @end
 
 @implementation GDWKNavigationDelegate
+
+- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
+	NSString *ns = [message body];
+	String url = String::utf8([ns UTF8String]);
+	if (control != nullptr) {
+		control->emit_signal("callback", url);
+	}
+}
 
 - (WKWebView *)webView:(WKWebView *)webView createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration forNavigationAction:(WKNavigationAction *)navigationAction windowFeatures:(WKWindowFeatures *)windowFeatures {
 	if (control != nullptr) {
@@ -87,13 +95,6 @@
 			[urlSchemeTask didReceiveData:[[NSData alloc] initWithBytes:(const void *)data.read().ptr() length:(NSUInteger)data.size()]];
 			[urlSchemeTask didFinish];
 		}
-	} else if (url.begins_with("gdscript")) {
-		if (control != nullptr) {
-			control->emit_signal("callback", url);
-		}
-
-		[urlSchemeTask didReceiveResponse:[[NSURLResponse alloc] initWithURL:requestURL MIMEType:@"text/html" expectedContentLength:(NSInteger)0 textEncodingName:nil]];
-		[urlSchemeTask didFinish];
 	} else {
 		[urlSchemeTask didReceiveResponse:[[NSHTTPURLResponse alloc] initWithURL:requestURL statusCode:404 HTTPVersion:@"HTTP/1.1" headerFields:nil]];
 		[urlSchemeTask didFinish];
@@ -149,7 +150,10 @@ void WebViewOverlay::_notification(int p_what) {
 					WKWebViewConfiguration* webViewConfig = [[WKWebViewConfiguration alloc] init];
 					[webViewConfig setURLSchemeHandler:sch_handle forURLScheme:@"res"];
 					[webViewConfig setURLSchemeHandler:sch_handle forURLScheme:@"user"];
-					[webViewConfig setURLSchemeHandler:sch_handle forURLScheme:@"gdscript"];
+					[[webViewConfig userContentController] addScriptMessageHandler:nav_handle name:@"callback"];
+
+					WKUserScript *scr = [[WKUserScript alloc] initWithSource:(NSString *)@"function webviewMessage(s){window.webkit.messageHandlers.callback.postMessage(s);}" injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:true];
+					[[webViewConfig userContentController] addUserScript:scr];
 
 					float sc = OS::get_singleton()->get_screen_max_scale();
 					Rect2i rect = get_window_rect();
@@ -334,9 +338,9 @@ void WebViewOverlay::execute_java_script(const String &p_script) {
 	[data->view evaluateJavaScript:[NSString stringWithUTF8String:p_script.utf8().get_data()] completionHandler:nil];
 }
 
-void WebViewOverlay::load_string(const String &p_source, const String &p_url) {
+void WebViewOverlay::load_string(const String &p_source) {
 	ERR_FAIL_COND(data->view == nullptr);
-	[data->view loadHTMLString:[NSString stringWithUTF8String:p_source.utf8().get_data()] baseURL:[NSURL URLWithString:[NSString stringWithUTF8String:p_url.utf8().get_data()]]];
+	[data->view loadHTMLString:[NSString stringWithUTF8String:p_source.utf8().get_data()] baseURL:nil];
 }
 
 bool WebViewOverlay::can_go_back() const {
@@ -349,6 +353,10 @@ bool WebViewOverlay::can_go_forward() const {
 	ERR_FAIL_COND_V(data->view == nullptr, false);
 
 	return [data->view canGoForward];
+}
+
+bool WebViewOverlay::is_ready() const {
+	return (data->view != nullptr);
 }
 
 bool WebViewOverlay::is_loading() const {

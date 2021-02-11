@@ -12,6 +12,7 @@ void WebViewOverlay::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("can_go_forward"), &WebViewOverlay::can_go_forward);
 
 	ClassDB::bind_method(D_METHOD("is_loading"), &WebViewOverlay::is_loading);
+	ClassDB::bind_method(D_METHOD("is_ready"), &WebViewOverlay::is_ready);
 	ClassDB::bind_method(D_METHOD("is_secure_content"), &WebViewOverlay::is_secure_content);
 
 	ClassDB::bind_method(D_METHOD("go_back"), &WebViewOverlay::go_back);
@@ -31,7 +32,7 @@ void WebViewOverlay::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_zoom_level"), &WebViewOverlay::get_zoom_level);
 	ClassDB::bind_method(D_METHOD("set_zoom_level", "zoom"), &WebViewOverlay::set_zoom_level);
 
-	ClassDB::bind_method(D_METHOD("load_string", "source", "url"), &WebViewOverlay::load_string);
+	ClassDB::bind_method(D_METHOD("load_string", "source"), &WebViewOverlay::load_string);
 	ClassDB::bind_method(D_METHOD("execute_java_script", "script"), &WebViewOverlay::execute_java_script);
 
 	ClassDB::bind_method(D_METHOD("get_snapshot", "width"), &WebViewOverlay::get_snapshot);

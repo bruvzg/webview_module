@@ -50,13 +50,15 @@ public:
 
 	String get_title() const;
 
-	void load_string(const String &p_source, const String &p_url);
+	void load_string(const String &p_source);
 	void execute_java_script(const String &p_script);
 
 	void get_snapshot(int p_width);
 
 	bool can_go_back() const;
 	bool can_go_forward() const;
+
+	bool is_ready() const;
 	bool is_loading() const;
 	bool is_secure_content() const;
 	void go_back();

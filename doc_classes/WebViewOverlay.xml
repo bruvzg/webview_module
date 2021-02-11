@@ -6,9 +6,7 @@
 	<description>
 		WebViewOverlay control uses the following native backends:
 		* macOS: WKWebView
-		* Windows: Microsoft Edge WebView2 (WIP)
-
-		WebViewOverlay supports "res://" and "user://" custom schemes to access Godot virtual file system and "gdscript://" scheme for callbacks.
+		* Windows: Microsoft Edge WebView2
 
 		WebViewOverlay is rendered on top of the main window and have some restrictions:
 		* Control should be used only in the main 2D viewport.
@@ -82,6 +80,13 @@
 				Returns [code]true[/code] if current page is loading.
 			</description>
 		</method>
+		<method name="is_ready" qualifiers="const">
+			<return type="bool">
+			</return>
+			<description>
+				Returns [code]true[/code] if control is initialized and ready to use.
+			</description>
+		</method>
 		<method name="is_secure_content" qualifiers="const">
 			<return type="bool">
 			</return>
@@ -94,10 +99,8 @@
 			</return>
 			<argument index="0" name="source" type="String">
 			</argument>
-			<argument index="1" name="url" type="String">
-			</argument>
 			<description>
-				Loads page from the [code]source[/code] string. [code]url[/code] is used to resolve relative URLs within the [code]source[/code] string.
+				Loads page from the [code]source[/code] string.
 			</description>
 		</method>
 		<method name="reload">
@@ -120,7 +123,7 @@
 			If [code]true[/code], control background can be transparent.
 		</member>
 		<member name="url" type="String" setter="set_url" getter="get_url" default="&quot;&quot;">
-			The URL of the current page.
+			The URL of the current page. [code]"res:\\"[/code] and [code]"user:\\"[/code] schemas are supported on macOS only.
 		</member>
 		<member name="user_agent" type="String" setter="set_user_agent" getter="get_user_agent" default="&quot;&quot;">
 			The custom user agent string.
@@ -134,7 +137,7 @@
 			<argument index="0" name="url" type="String">
 			</argument>
 			<description>
-				Emitted when request for the [code]gdscript://*[/code] URL is received.
+				Emitted when [code]window.chrome.webview.postMessage(`message`);[/code] is called from JavaScript.
 			</description>
 		</signal>
 		<signal name="finish_navigation">

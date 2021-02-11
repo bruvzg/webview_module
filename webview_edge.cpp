@@ -15,31 +15,87 @@ using namespace Microsoft::WRL;
 typedef HRESULT (WINAPI *CreateCoreWebView2EnvironmentWithOptionsPtr)(PCWSTR p_browser_executable_folder, PCWSTR p_user_data_folder, ICoreWebView2EnvironmentOptions* p_environment_options, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* r_environment_created_handler);
 CreateCoreWebView2EnvironmentWithOptionsPtr webview_CreateCoreWebView2EnvironmentWithOptions = nullptr;
 
+class WebViewOverlaySnapshotDelegate : public ICoreWebView2CapturePreviewCompletedHandler {
+public:
+	WebViewOverlay *control = nullptr;
+	ComPtr<IStream> img_data_stream = nullptr;
+	LONG _cRef = 1;
+
+	ULONG STDMETHODCALLTYPE AddRef() {
+		return InterlockedIncrement(&_cRef);
+	}
+
+	ULONG STDMETHODCALLTYPE Release() {
+		ULONG ulRef = InterlockedDecrement(&_cRef);
+		if (0 == ulRef) {
+			delete this;
+		}
+		return ulRef;
+	}
+
+	HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, VOID **ppvInterface) {
+		AddRef();
+		*ppvInterface = this;
+		return S_OK;
+	}
+
+	HRESULT STDMETHODCALLTYPE Invoke(HRESULT p_error_code) {
+		STATSTG stats;
+		img_data_stream->Stat(&stats, STATFLAG_NONAME);
+		ULONG size = stats.cbSize.QuadPart;
+		ULONG bytes_read;
+
+		PoolVector<uint8_t> imgdata;
+		imgdata.resize(size);
+		PoolVector<uint8_t>::Write wr = imgdata.write();
+
+		LARGE_INTEGER li;
+		li.QuadPart = 0;
+		img_data_stream->Seek(li, STREAM_SEEK_SET, nullptr);
+		img_data_stream->Read(wr.ptr(), size, &bytes_read);
+
+		Ref<Image> image;
+		image.instance();
+		image->load_png_from_buffer(imgdata);
+
+		control->emit_signal("snapshot_ready", image);
+
+		return S_OK;
+	}
+
+	WebViewOverlaySnapshotDelegate(WebViewOverlay* p_control) {
+		control = p_control;
+		img_data_stream = SHCreateMemStream(nullptr, 0);
+	}
+};
+
+/*************************************************************************/
+
 class WebViewOverlayDelegate :
 	public ICoreWebView2CreateCoreWebView2ControllerCompletedHandler,
 	public ICoreWebView2NavigationStartingEventHandler,
 	public ICoreWebView2NavigationCompletedEventHandler,
 	public ICoreWebView2NewWindowRequestedEventHandler,
-	public ICoreWebView2WebResourceRequestedEventHandler,
-	public ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler,
-	public ICoreWebView2CapturePreviewCompletedHandler {
+	public ICoreWebView2WebMessageReceivedEventHandler,
+	public ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler,
+	public ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler {
 public:
 	WebViewOverlay *control = nullptr;
 	HWND hwnd = nullptr;
 
-	ComPtr<IStream> img_data_stream = nullptr;
 	LONG _cRef = 1;
 
 	bool is_loading = false;
+	bool is_ready = false;
 
-	ICoreWebView2Environment *env = nullptr;
-	ICoreWebView2 *webview = nullptr;
-	ICoreWebView2Controller *controller = nullptr;
+	ComPtr<ICoreWebView2Environment> env = nullptr;
+	ComPtr<ICoreWebView2> webview = nullptr;
+	ComPtr<ICoreWebView2Controller> controller = nullptr;
 
 	EventRegistrationToken navigation_start_token = {};
 	EventRegistrationToken navigation_completed_token = {};
 	EventRegistrationToken new_window_token = {};
-	EventRegistrationToken resource_requested_token = {};
+	EventRegistrationToken message_token = {};
 
 	ULONG STDMETHODCALLTYPE AddRef() {
 		return InterlockedIncrement(&_cRef);
@@ -85,66 +141,11 @@ public:
 		return S_OK;
 	}
 
-	HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2* p_sender, ICoreWebView2WebResourceRequestedEventArgs* p_args) {
-		ComPtr<ICoreWebView2WebResourceRequest> req;
-		p_args->get_Request(&req);
-
-		LPWSTR uri;
-		req->get_Uri(&uri);
-		String url = String(uri);
-
-		if (url.begins_with("res") || url.begins_with("user")) {
-			Error err;
-			FileAccess *f = FileAccess::open(url, FileAccess::READ, &err);
-			if (err != OK) {
-				ComPtr<ICoreWebView2WebResourceResponse> response;
-				env->CreateWebResourceResponse(nullptr, 404, L"Not found", L"", &response);
-				p_args->put_Response(response.Get());
-			} else {
-				PoolVector<uint8_t> data;
-				data.resize(f->get_len());
-				f->get_buffer(data.write().ptr(), f->get_len());
-
-				ComPtr<IStream> data_stream = SHCreateMemStream((const BYTE *)data.read().ptr(), data.size());
-
-				ComPtr<ICoreWebView2WebResourceResponse> response;
-				env->CreateWebResourceResponse(data_stream.Get(), 200, L"OK", L"", &response);
-
-				ComPtr<ICoreWebView2HttpResponseHeaders> headers;
-				response->get_Headers(&headers);
-				headers->AppendHeader(L"Content-Type", L"text/html");
-				headers->AppendHeader(L"Content-Length", (LPCWSTR)itos(data.size()).c_str());
-
-				p_args->put_Response(response.Get());
-			}
-		} else if (url.begins_with("gdscript")) {
-			if (control != nullptr) {
-				control->emit_signal("callback", url);
-			}
-
-			ComPtr<ICoreWebView2WebResourceResponse> response;
-			env->CreateWebResourceResponse(nullptr, 200, L"OK", L"", &response);
-
-			ComPtr<ICoreWebView2HttpResponseHeaders> headers;
-			response->get_Headers(&headers);
-			headers->AppendHeader(L"Content-Type", L"text/html");
-			headers->AppendHeader(L"Content-Length", L"0");
-			p_args->put_Response(response.Get());
-		} else {
-			ComPtr<ICoreWebView2WebResourceResponse> response;
-			env->CreateWebResourceResponse(nullptr, 404, L"Not found", L"", &response);
-			p_args->put_Response(response.Get());
-		}
-		return S_OK;
-	}
-
 	HRESULT STDMETHODCALLTYPE Invoke(HRESULT p_result, ICoreWebView2Environment* p_environment) {
 		env = p_environment;
-		env->CreateCoreWebView2Controller(hwnd, this);
-		LPWSTR version_info;
-		env->get_BrowserVersionString(&version_info);
-		printf("edge_version: %ws\n", version_info);
-
+		HRESULT hr = env->CreateCoreWebView2Controller(hwnd, this);
+		ERR_FAIL_COND_V(FAILED(hr), S_OK);
+	
 		return S_OK;
 	}
 
@@ -156,36 +157,25 @@ public:
 		webview->add_NavigationStarting(this, &navigation_start_token);
 		webview->add_NavigationCompleted(this, &navigation_completed_token);
 		webview->add_NewWindowRequested(this, &new_window_token);
+		webview->add_WebMessageReceived(this, &message_token);
 
-		//custom schemes
-		webview->AddWebResourceRequestedFilter(L"res://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
-		webview->AddWebResourceRequestedFilter(L"user://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
-		webview->AddWebResourceRequestedFilter(L"gdscript://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
-		webview->add_WebResourceRequested(this, &resource_requested_token);
+		webview->AddScriptToExecuteOnDocumentCreated(L"function webviewMessage(s){window.chrome.callback.postMessage(s);}", this);
+
+		is_ready = true;
 
 		return S_OK;
 	}
 
-	HRESULT STDMETHODCALLTYPE Invoke(HRESULT p_error_code) {
-		if (img_data_stream != nullptr) {
-			STATSTG stats;
-			img_data_stream->Stat(&stats, STATFLAG_NONAME);
-			ULONG size = stats.cbSize.QuadPart;
-			ULONG bytes_read;
+	HRESULT STDMETHODCALLTYPE Invoke(HRESULT p_error_code, LPCWSTR p_id) {
+		// script is injected
+		return S_OK;
+	}
 
-			PoolVector<uint8_t> imgdata;
-			imgdata.resize(size);
-			PoolVector<uint8_t>::Write wr = imgdata.write();
-			img_data_stream->Read(wr.ptr(), size, &bytes_read);
+	HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2 *p_sender, ICoreWebView2WebMessageReceivedEventArgs *p_args) {
+		LPWSTR json;
+		p_args->get_WebMessageAsJson(&json);
 
-			Ref<Image> image;
-			image.instance();
-			image->load_png_from_buffer(imgdata);
-
-			control->emit_signal("snapshot_ready", image);
-
-			img_data_stream = nullptr;
-		}
+		control->emit_signal("callback", String(json));
 		return S_OK;
 	}
 
@@ -193,10 +183,11 @@ public:
 		control = p_control;
 		hwnd = p_hwnd;
 
-		String exe_path = OS::get_singleton()->get_executable_path();
 		String cache_path = OS::get_singleton()->get_cache_path();
 
-		HRESULT hr = webview_CreateCoreWebView2EnvironmentWithOptions((LPCWSTR)exe_path.c_str(), (LPCWSTR)cache_path.c_str(), nullptr, this);
+		CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+
+		HRESULT hr = webview_CreateCoreWebView2EnvironmentWithOptions(nullptr, (LPCWSTR)cache_path.c_str(), nullptr, this);
 		ERR_FAIL_COND(FAILED(hr));
 	}
 
@@ -205,7 +196,7 @@ public:
 			webview->remove_NavigationCompleted(navigation_completed_token);
 			webview->remove_NavigationStarting(navigation_start_token);
 			webview->remove_NewWindowRequested(new_window_token);
-			webview->remove_WebResourceRequested(resource_requested_token);
+			webview->remove_WebMessageReceived(message_token);
 		}
 	}
 };
@@ -240,34 +231,38 @@ void WebViewOverlay::_notification(int p_what) {
 				if (hwnd != nullptr) {
 					float sc = OS::get_singleton()->get_screen_max_scale();
 					Rect2i rect = get_window_rect();
-					HWND ctrl_wnd = CreateWindowW(L"GodotWebViewControl", nullptr, WS_CHILD | WS_VISIBLE, rect.position.x / sc, rect.position.y / sc, rect.size.width / sc, rect.size.height / sc, hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
-					WebViewOverlayDelegate *webview = new WebViewOverlayDelegate(this, ctrl_wnd);
-					if (user_agent.length() > 0) {
-						//TODO - available in unreleased ICoreWebView2ExperimentalSettings only
-					}
-					//set (no_background) TODO, add WM_PAINT handler with SetBkMode(hdc, TRANSPARENT);
-
-					RECT rc;
-					rc.left = rect.position.x / sc;
-					rc.top = rect.position.y / sc;
-					rc.right = rc.left + rect.size.width / sc;
-					rc.bottom = rc.top + rect.size.height / sc;
-					webview->controller->put_Bounds(rc);
-
-					data->view->controller->put_ZoomFactor(zoom);
-					if (is_visible_in_tree()) {
-						ShowWindow(ctrl_wnd, SW_SHOW);
-						webview->controller->put_IsVisible(TRUE);
-					} else {
-						webview->controller->put_IsVisible(FALSE);
-						ShowWindow(ctrl_wnd, SW_HIDE);
-					}
-					data->view->webview->Navigate((LPCWSTR)home_url.c_str());
+					WebViewOverlayDelegate *webview = new WebViewOverlayDelegate(this, hwnd);
 					data->view = webview;
-					ctrl_err_status = 0;
-
-					set_process_internal(false);
+					ctrl_err_status = -1;
 				}
+			}
+			if (!Engine::get_singleton()->is_editor_hint() && (data->view != nullptr) && (data->view->is_ready) && (ctrl_err_status == -1) && (err_status == 0)) {
+				float sc = OS::get_singleton()->get_screen_max_scale();
+				Rect2i rect = get_window_rect();
+
+				if (user_agent.length() > 0) {
+					//TODO - available in unreleased ICoreWebView2ExperimentalSettings only
+				}
+				//set (no_background) TODO, add WM_PAINT handler with SetBkMode(hdc, TRANSPARENT);
+
+				RECT rc;
+				rc.left = rect.position.x / sc;
+				rc.top = rect.position.y / sc;
+				rc.right = rc.left + rect.size.width / sc;
+				rc.bottom = rc.top + rect.size.height / sc;
+
+				data->view->controller->put_Bounds(rc);
+				data->view->controller->put_ZoomFactor(zoom);
+				if (is_visible_in_tree()) {
+					data->view->controller->put_IsVisible(TRUE);
+				} else {
+					data->view->controller->put_IsVisible(FALSE);
+				}
+
+				data->view->webview->Navigate((LPCWSTR)home_url.c_str());
+				ctrl_err_status = 0;
+
+				set_process_internal(false);
 			}
 		} break;
 		case NOTIFICATION_DRAW: {
@@ -291,13 +286,12 @@ void WebViewOverlay::_notification(int p_what) {
 			} else if (Engine::get_singleton()->is_editor_hint()) {
 				_draw_placeholder();
 			}
-		} break;
+		} FALLTHROUGH;
 		case NOTIFICATION_MOVED_IN_PARENT:
 		case NOTIFICATION_RESIZED: {
-			if (data->view == nullptr) {
+			if ((data->view != nullptr) && (data->view->is_ready)) {
 				float sc = OS::get_singleton()->get_screen_max_scale();
 				Rect2i rect = get_window_rect();
-				SetWindowPos(data->view->hwnd, 0, rect.position.x / sc, rect.position.y / sc , rect.size.width / sc, rect.size.height / sc, SWP_NOACTIVATE | SWP_NOZORDER);
 
 				RECT rc;
 				rc.left = rect.position.x / sc;
@@ -308,21 +302,17 @@ void WebViewOverlay::_notification(int p_what) {
 			}
 		} break;
 		case NOTIFICATION_VISIBILITY_CHANGED: {
-			if (data->view == nullptr) {
+			if ((data->view != nullptr) && (data->view->is_ready)) {
 				if (is_visible_in_tree()) {
-					ShowWindow(data->view->hwnd, SW_SHOW);
 					data->view->controller->put_IsVisible(TRUE);
 				} else {
 					data->view->controller->put_IsVisible(FALSE);
-					ShowWindow(data->view->hwnd, SW_HIDE);
 				}
 			}
 		} break;
 		case NOTIFICATION_EXIT_TREE: {
-			if (data->view == nullptr) {
-				HWND ctrl_wnd = data->view->hwnd;
+			if (data->view != nullptr) {
 				delete data->view;
-				DestroyWindow(ctrl_wnd);
 				data->view = nullptr;
 			}
 		} break;
@@ -333,12 +323,10 @@ void WebViewOverlay::_notification(int p_what) {
 }
 
 void WebViewOverlay::get_snapshot(int p_width) {
-	ERR_FAIL_COND(data->view == nullptr);
+	ERR_FAIL_COND(data->view == nullptr || !data->view->is_ready);
 
-	if (data->view->img_data_stream == nullptr) {
-		data->view->img_data_stream = SHCreateMemStream(nullptr, 0);
-		data->view->webview->CapturePreview(COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, data->view->img_data_stream.Get(), data->view);
-	}
+	ComPtr<WebViewOverlaySnapshotDelegate> del = new WebViewOverlaySnapshotDelegate(this);
+	data->view->webview->CapturePreview(COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, del->img_data_stream.Get(), del.Get());
 }
 
 void WebViewOverlay::set_no_background(bool p_bg) {
@@ -352,13 +340,13 @@ bool WebViewOverlay::get_no_background() const {
 
 void WebViewOverlay::set_url(const String& p_url) {
 	home_url = p_url;
-	if (data->view == nullptr) {
+	if ((data->view != nullptr) && (data->view->is_ready)) {
 		data->view->webview->Navigate((LPCWSTR)p_url.c_str());
 	}
 }
 
 String WebViewOverlay::get_url() const {
-	if (data->view == nullptr) {
+	if ((data->view != nullptr) && (data->view->is_ready)) {
 		LPWSTR uri;
 		data->view->webview->get_Source(&uri);
 		ERR_FAIL_COND_V(uri == nullptr, "");
@@ -381,7 +369,7 @@ String WebViewOverlay::get_user_agent() const {
 }
 
 double WebViewOverlay::get_zoom_level() const {
-	if (data->view == nullptr) {
+	if ((data->view != nullptr) && (data->view->is_ready)) {
 		double _zoom;
 		data->view->controller->get_ZoomFactor(&_zoom);
 		return _zoom;
@@ -391,7 +379,7 @@ double WebViewOverlay::get_zoom_level() const {
 
 void WebViewOverlay::set_zoom_level(double p_zoom) {
 	zoom = p_zoom;
-	if (data->view == nullptr) {
+	if ((data->view != nullptr) && (data->view->is_ready)) {
 		data->view->controller->put_ZoomFactor(zoom);
 	}
 }
@@ -408,15 +396,14 @@ String WebViewOverlay::get_title() const {
 }
 
 void WebViewOverlay::execute_java_script(const String &p_script) {
-	ERR_FAIL_COND(data->view == nullptr);
+	ERR_FAIL_COND(data->view == nullptr || !data->view->is_ready);
 
 	data->view->webview->ExecuteScript((LPCWSTR)p_script.c_str(), nullptr);
 }
 
-void WebViewOverlay::load_string(const String &p_source, const String &p_url) {
-	ERR_FAIL_COND(data->view == nullptr);
+void WebViewOverlay::load_string(const String &p_source) {
+	ERR_FAIL_COND(data->view == nullptr || !data->view->is_ready);
 	data->view->webview->NavigateToString((LPCWSTR)p_source.c_str());
-	//TODO any way to set URL ???
 }
 
 bool WebViewOverlay::can_go_back() const {
@@ -433,6 +420,10 @@ bool WebViewOverlay::can_go_forward() const {
 	return result;
 }
 
+bool WebViewOverlay::is_ready() const {
+	return (data->view != nullptr) && data->view->is_ready;
+}
+
 bool WebViewOverlay::is_loading() const {
 	ERR_FAIL_COND_V(data->view == nullptr, false);
 	return data->view->is_loading;
@@ -445,22 +436,22 @@ bool WebViewOverlay::is_secure_content() const {
 }
 
 void WebViewOverlay::go_back() {
-	ERR_FAIL_COND(data->view == nullptr);
+	ERR_FAIL_COND(data->view == nullptr || !data->view->is_ready);
 	data->view->webview->GoBack();
 }
 
 void WebViewOverlay::go_forward() {
-	ERR_FAIL_COND(data->view == nullptr);
+	ERR_FAIL_COND(data->view == nullptr || !data->view->is_ready);
 	data->view->webview->GoForward();
 }
 
 void WebViewOverlay::reload() {
-	ERR_FAIL_COND(data->view == nullptr);
+	ERR_FAIL_COND(data->view == nullptr || !data->view->is_ready);
 	data->view->webview->Reload();
 }
 
 void WebViewOverlay::stop() {
-	ERR_FAIL_COND(data->view == nullptr);
+	ERR_FAIL_COND(data->view == nullptr || !data->view->is_ready);
 	data->view->webview->Stop();
 }
 
